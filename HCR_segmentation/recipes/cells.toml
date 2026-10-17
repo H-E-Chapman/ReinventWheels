@@ -1,0 +1,99 @@
+# Cells only (no spots), for the Segment and Select steps: segment the
+# HCR-positive somata on daf-28 (C0) over the whole volume, then each cell's
+# mean intensity, local background and mean - background in every HCR channel
+# -- what the cell-selection rule ("no ins-6 signal") needs.
+# Channels: C0 daf-28, C1 ins-4, C2 ins-6, C3 DAPI.
+schema_version = 1
+name = "hcr_cells"
+
+[[steps]]
+id = "read_daf28"
+op = "io.read_image"
+outputs = { image = "daf28", frame = "frame" }
+params = { path = "originals/N2_ins-6_488_DAPI_40xrepeatall.1.czi - T=0.tif", channel = 0 }
+
+[[steps]]
+id = "read_ins4"
+op = "io.read_image"
+outputs = { image = "ins4" }
+params = { path = "originals/N2_ins-6_488_DAPI_40xrepeatall.1.czi - T=0.tif", channel = 1 }
+
+[[steps]]
+id = "read_ins6"
+op = "io.read_image"
+outputs = { image = "ins6" }
+params = { path = "originals/N2_ins-6_488_DAPI_40xrepeatall.1.czi - T=0.tif", channel = 2 }
+
+# -- cell masks: blocks on background-subtracted daf-28 --------------------------------
+[[steps]]
+id = "background"
+op = "hcrcells.subtract_background"
+inputs = { image = "daf28", frame = "frame" }
+outputs = { image = "daf28_bgsub" }
+params = { radius = 4.0 }
+
+[[steps]]
+id = "smooth"
+op = "seg.smooth"
+inputs = { image = "daf28_bgsub", frame = "frame" }
+outputs = { image = "daf28_smooth" }
+params = { sigma = 0.4 }
+
+[[steps]]
+id = "threshold"
+op = "seg.threshold"
+inputs = { image = "daf28_smooth" }
+outputs = { mask = "cell_mask" }
+params = { method = "otsu" }
+
+[[steps]]
+id = "clean"
+op = "seg.clean"
+inputs = { mask = "cell_mask", frame = "frame" }
+outputs = { mask = "cell_mask_clean" }
+# The opening cuts thin necks to small neighbouring bits (sample 1, cell A).
+params = { fill_holes = true, opening_radius = 0.5 }
+
+# Touching somata (an ASI/ASJ pair can touch, sample 2) are split by a
+# distance-transform watershed; seeds at least min_distance apart.
+[[steps]]
+id = "label"
+op = "seg.split_touching"
+inputs = { mask = "cell_mask_clean", frame = "frame" }
+outputs = { labels = "cells_all" }
+params = { min_distance = 3.0 }
+
+[[steps]]
+id = "filter"
+op = "seg.filter_labels"
+inputs = { labels = "cells_all", frame = "frame" }
+outputs = { labels = "cells" }
+params = { min_volume = 10.0 }
+
+[[steps]]
+id = "objects"
+op = "measure.objects"
+inputs = { labels = "cells", image = "daf28", frame = "frame" }
+outputs = { table = "objects" }
+
+# -- per-cell intensity (no spots) -----------------------------------------------------
+[[steps]]
+id = "intensity_daf28"
+op = "hcrcells.cell_intensity"
+inputs = { table = "objects", labels = "cells", image = "daf28", frame = "frame" }
+outputs = { table = "cells_i1" }
+params = { channel = "daf28" }
+
+[[steps]]
+id = "intensity_ins4"
+op = "hcrcells.cell_intensity"
+inputs = { table = "cells_i1", labels = "cells", image = "ins4", frame = "frame" }
+outputs = { table = "cells_i2" }
+params = { channel = "ins4" }
+
+[[steps]]
+id = "intensity_ins6"
+op = "hcrcells.cell_intensity"
+inputs = { table = "cells_i2", labels = "cells", image = "ins6", frame = "frame" }
+outputs = { table = "cell_table" }
+params = { channel = "ins6" }

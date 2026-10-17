@@ -1,0 +1,61 @@
+# HCR Cells: its own locked environment, so the app starts with `pixi run gui`
+# from this folder. vanua and tanoa are installed editable from the sibling
+# checkout (../vanua, with its tanoa submodule); the conda packages mirror
+# vanua's own pixi.toml minus the docs/benchmark-only extras.
+[workspace]
+name = "hcrcells"
+version = "0.1.0"
+channels = ["conda-forge"]
+platforms = ["win-64"]
+
+[dependencies]
+python = ">=3.11,<3.13"
+numpy = ">=1.26"
+scipy = ">=1.11"
+pandas = ">=2.1"
+scikit-image = ">=0.23"
+tifffile = ">=2024.2"
+zarr = ">=3.0"
+dask = ">=2024.1"
+pyyaml = ">=6.0"
+jsonschema = ">=4.21"
+click = ">=8.1"
+tqdm = ">=4.66"
+psutil = ">=5.9"
+lxml = ">=5.0"
+pyqt = ">=5.15"
+vtk = ">=9.3"
+matplotlib = ">=3.8"
+ffmpeg = "*"        # the z-sweep movie (matplotlib's FFMpegWriter)
+pytest = ">=8.0"
+openpyxl = ">=3.1"  # Excel export of the results table
+pip = ">=24"
+
+[pypi-dependencies]
+vanua = { path = "../vanua", editable = true }
+tanoa = { path = "../vanua/external/tanoa", editable = true }
+hcrcells = { path = ".", editable = true }
+
+[tasks]
+# The GUI: Load -> Segment -> Review cells -> Run series -> Plots.
+gui = "python -m hcrcells.launch originals"
+# Group experiments (one image per worm, date folders, groups in the file names):
+# pixi run gui-groups <folder>  ->  transcripts_per_image.csv. `gui <folder>` detects the type too.
+gui-groups = "python -m hcrcells.launch --groups"
+# Headless: pixi run groups <folder> <out>
+groups = "python -m hcrcells.groups"
+# The same GUI without the splash (blocking start; debugging).
+gui-direct = "python -m hcrcells.app originals"
+# Headless: every sample in originals/ -> out/<sample>/ (+ out/batch_effect.png).
+series = "python -m hcrcells.series originals out"
+# Quick check of the pipeline on the first two timepoints of each sample.
+series-quick = "python -m hcrcells.series originals out_quick --last 1"
+# A z-sweep movie of one timepoint: pixi run movie "originals/<file>.tif" out/zsweep.mp4
+movie = "python -m hcrcells.movie"
+validate = "vanua recipe validate recipes/timepoint.toml --ops hcrcells.ops:OPS"
+# Unit tests on small synthetic stacks (no real data, seconds not minutes).
+test = "pytest tests -q"
+# Screenshots on the real display (threaded; the window stays responsive).
+screenshots = "python scripts/screenshots.py"
+# Start-up time: blocking start vs splash launcher, fresh processes, real display.
+bench-launch = "python scripts/bench_launch.py"

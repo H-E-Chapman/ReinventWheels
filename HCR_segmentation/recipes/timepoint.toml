@@ -1,0 +1,155 @@
+# One timepoint (one TIFF) of a series: segment the somata on daf-28 (C0)
+# over the whole volume (to follow the cells as the sample drifts), keep the
+# cells of interest -- matched to `select.targets`, their last world
+# positions -- box them in a loose ROI, and a larger reference region around
+# the same cells. Spot detection, its automatic threshold, the isolated
+# single-spot reference and the per-cell measurements run in the reference
+# region only (most of the time per timepoint was spent there on the whole
+# volume); spots are counted per cell of interest. The ROI is recorded. Channels: C0 daf-28, C1 ins-4,
+# C2 ins-6, C3 DAPI. The crops keep world coordinates (their frame's origin
+# is the ROI corner).
+schema_version = 1
+name = "hcr_timepoint"
+
+[[steps]]
+id = "read_daf28"
+op = "io.read_image"
+outputs = { image = "daf28", frame = "frame" }
+params = { path = "originals/N2_ins-6_488_DAPI_40xrepeatall.1.czi - T=0.tif", channel = 0 }
+
+[[steps]]
+id = "read_ins4"
+op = "io.read_image"
+outputs = { image = "ins4" }
+params = { path = "originals/N2_ins-6_488_DAPI_40xrepeatall.1.czi - T=0.tif", channel = 1 }
+
+[[steps]]
+id = "read_ins6"
+op = "io.read_image"
+outputs = { image = "ins6" }
+params = { path = "originals/N2_ins-6_488_DAPI_40xrepeatall.1.czi - T=0.tif", channel = 2 }
+
+# -- cell masks: blocks on background-subtracted daf-28 --------------------------------
+[[steps]]
+id = "background"
+op = "hcrcells.subtract_background"
+inputs = { image = "daf28", frame = "frame" }
+outputs = { image = "daf28_bgsub" }
+params = { radius = 4.0 }
+
+[[steps]]
+id = "smooth"
+op = "seg.smooth"
+inputs = { image = "daf28_bgsub", frame = "frame" }
+outputs = { image = "daf28_smooth" }
+params = { sigma = 0.4 }
+
+[[steps]]
+id = "threshold"
+op = "seg.threshold"
+inputs = { image = "daf28_smooth" }
+outputs = { mask = "cell_mask" }
+params = { method = "otsu" }
+
+[[steps]]
+id = "clean"
+op = "seg.clean"
+inputs = { mask = "cell_mask", frame = "frame" }
+outputs = { mask = "cell_mask_clean" }
+# The opening cuts thin necks to small neighbouring bits (sample 1, cell A).
+params = { fill_holes = true, opening_radius = 0.5 }
+
+# Touching somata (an ASI/ASJ pair can touch, sample 2) are split by a
+# distance-transform watershed; seeds at least min_distance apart.
+[[steps]]
+id = "label"
+op = "seg.split_touching"
+inputs = { mask = "cell_mask_clean", frame = "frame" }
+outputs = { labels = "cells_all" }
+params = { min_distance = 3.0 }
+
+[[steps]]
+id = "filter"
+op = "seg.filter_labels"
+inputs = { labels = "cells_all", frame = "frame" }
+outputs = { labels = "cells" }
+params = { min_volume = 10.0 }
+
+[[steps]]
+id = "objects"
+op = "measure.objects"
+inputs = { labels = "cells", image = "daf28", frame = "frame" }
+outputs = { table = "objects" }
+
+# -- cells of interest and their ROI ---------------------------------------------------
+[[steps]]
+id = "select"
+op = "hcrcells.select_cells"
+inputs = { table = "objects", labels = "cells", frame = "frame" }
+outputs = { table = "selected", roi = "roi", ref_roi = "ref_roi" }
+params = { targets = "", max_distance = 3.0, margin_xy = 8.0, margin_z = 3.0, ref_margin_xy = 25.0, ref_margin_z = 10.0 }
+
+[[steps]]
+id = "crop_cells"
+op = "hcrcells.crop_labels"
+inputs = { labels = "cells", roi = "ref_roi" }
+outputs = { labels = "roi_cells" }
+
+[[steps]]
+id = "crop_daf28"
+op = "hcrcells.crop_image"
+inputs = { image = "daf28", frame = "frame", roi = "ref_roi" }
+outputs = { image = "roi_daf28", frame = "roi_frame" }
+
+[[steps]]
+id = "crop_ins4"
+op = "hcrcells.crop_image"
+inputs = { image = "ins4", frame = "frame", roi = "ref_roi" }
+outputs = { image = "roi_ins4" }
+
+[[steps]]
+id = "crop_ins6"
+op = "hcrcells.crop_image"
+inputs = { image = "ins6", frame = "frame", roi = "ref_roi" }
+outputs = { image = "roi_ins6" }
+
+# -- spots, in the reference region -----------------------------------------------------------------
+[[steps]]
+id = "spots_daf28"
+op = "hcrcells.detect_spots"
+inputs = { image = "roi_daf28", frame = "roi_frame" }
+outputs = { table = "spots_daf28" }
+
+[[steps]]
+id = "spots_ins4"
+op = "hcrcells.detect_spots"
+inputs = { image = "roi_ins4", frame = "roi_frame" }
+outputs = { table = "spots_ins4" }
+
+[[steps]]
+id = "spots_ins6"
+op = "hcrcells.detect_spots"
+inputs = { image = "roi_ins6", frame = "roi_frame" }
+outputs = { table = "spots_ins6" }
+
+# -- per-cell measurements, in the reference region -------------------------------------------------
+[[steps]]
+id = "stats_daf28"
+op = "hcrcells.channel_stats"
+inputs = { table = "selected", labels = "roi_cells", image = "roi_daf28", spots = "spots_daf28", frame = "roi_frame" }
+outputs = { table = "cells_t1" }
+params = { channel = "daf28" }
+
+[[steps]]
+id = "stats_ins4"
+op = "hcrcells.channel_stats"
+inputs = { table = "cells_t1", labels = "roi_cells", image = "roi_ins4", spots = "spots_ins4", frame = "roi_frame" }
+outputs = { table = "cells_t2" }
+params = { channel = "ins4" }
+
+[[steps]]
+id = "stats_ins6"
+op = "hcrcells.channel_stats"
+inputs = { table = "cells_t2", labels = "roi_cells", image = "roi_ins6", spots = "spots_ins6", frame = "roi_frame" }
+outputs = { table = "cell_table" }
+params = { channel = "ins6" }

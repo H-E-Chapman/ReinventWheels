@@ -1,0 +1,117 @@
+schema_version = 1
+name = "hcrcells"
+title = "HCR Cells"
+summary = "Per-cell HCR spot counts and intensities (daf-28, ins-4, ins-6) in C. elegans ASI/ASJ across a photobleaching series"
+stage = "first-result"
+approval = "prototype"
+approval_reason = "Own-lab non-human (C. elegans N2) data, exploratory photobleaching test; no decisions about animals or patients"
+known_limits = [
+  "Spots in the dense somata are resolvable DoG maxima, not single transcripts: counts saturate with packing and barely follow bleaching",
+  "daf-28 (C0) saturates at 255 in up to 12% of a cell's voxels at T=0: its intensities are lower bounds there",
+  "Cell masks come from daf-28 alone; a cell without daf-28 signal is not found",
+]
+
+[alignment.intent]
+status = "stated"
+text = "Spot count and intensity per cell for each HCR channel, across 6 repeated acquisitions of one sample, to measure photobleaching"
+[alignment.data]
+status = "stated"
+text = "3D confocal TIFF (from CZI), ZCYX uint8, 38 x 4 x 1024 x 1024, 0.5 x 0.099 x 0.099 um; C0 daf-28, C1 ins-4, C2 ins-6 (HCR), C3 DAPI; one file per timepoint T=0..5"
+[alignment.stewardship]
+status = "stated"
+text = "Own lab, non-human (C. elegans N2); fine to process locally with an AI tool; originals/ never committed"
+[alignment.measurement]
+status = "stated"
+text = "Per cell per timepoint per HCR channel: spot count, mean / integrated intensity, local background, background-subtracted values (a.u.); cell volume um3"
+[alignment.domain_logic]
+status = "open"
+text = "Which segmented somata are ASI-L/R and ASJ-L/R (4 expected, 5 found); what makes a cell or a curve invalid"
+[alignment.ground_truth]
+status = "open"
+text = "Not asked yet"
+[alignment.workflow]
+status = "assumed"
+text = "Load series -> Segment each T -> Match cells across T -> Measure -> Plot -> Export"
+[alignment.viewing]
+status = "stated"
+text = "Outlines on slices; 3D view"
+[alignment.delivery]
+status = "open"
+text = "Asked in the last analysis round"
+[alignment.tools]
+status = "assumed"
+text = "none"
+[alignment.demo]
+status = "assumed"
+text = "Asked only if a GUI is chosen"
+
+[data.sample]
+source = "Lab's own acquisition (originals/N2_ins-6_488_DAPI_40xrepeatall.1.czi - T=0..5.tif)"
+url = ""
+licence = "unpublished lab data; never redistributed or committed"
+fetch = ""
+
+[[ops]]
+name = "io.read_image"
+block = true
+[[ops]]
+name = "seg.smooth"
+block = true
+[[ops]]
+name = "seg.threshold"
+block = true
+[[ops]]
+name = "seg.clean"
+block = true
+[[ops]]
+name = "seg.label"
+block = true
+[[ops]]
+name = "seg.filter_labels"
+block = true
+[[ops]]
+name = "measure.objects"
+block = true
+[[ops]]
+name = "hcrcells.subtract_background"
+summary = "Subtract a broad Gaussian background (body autofluorescence)"
+inputs = { image = "image", frame = "blob" }
+outputs = { image = "image" }
+params = { radius = "float" }
+[[ops]]
+name = "hcrcells.detect_spots"
+summary = "HCR puncta: DoG local maxima above k x MAD noise"
+inputs = { image = "image", frame = "blob" }
+outputs = { table = "table" }
+params = { sigma_xy = "float", sigma_z = "float", threshold_k = "float", min_separation = "float" }
+[[ops]]
+name = "hcrcells.channel_stats"
+summary = "Per-cell intensity, background, saturation and spot count for one channel"
+inputs = { table = "table", labels = "labels", image = "image", spots = "table", frame = "blob" }
+outputs = { table = "table" }
+params = { channel = "str", shell_inner = "float", shell_outer = "float", saturation = "float" }
+
+[[recipes]]
+file = "recipes/timepoint.toml"
+purpose = "one timepoint; the series runner applies it per T and matches cells to T=0"
+
+[[measurements]]
+id = "M1"
+what = "HCR spot count per cell per channel"
+unit = "count"
+per = "cell x timepoint"
+acceptance = "to be agreed (round 2)"
+test = "tests/test_ops.py::test_m1_spot_count"
+[[measurements]]
+id = "M2"
+what = "Background-subtracted mean HCR intensity per cell per channel"
+unit = "a.u."
+per = "cell x timepoint"
+acceptance = "to be agreed (round 2)"
+test = "tests/test_ops.py::test_m2_intensity"
+
+[[plots]]
+id = "P1"
+kind = "other"
+from = "cells_per_timepoint"
+shows = "Bleaching curves: background-subtracted mean relative to T=0, and spots per cell, vs timepoint, one line per cell, one panel per channel"
