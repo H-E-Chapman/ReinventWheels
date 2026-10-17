@@ -4,7 +4,9 @@ HCR Cells measures HCR RNA-FISH signal in the ASI and ASJ neurons of *C. elegans
 across a photobleaching series: the same worm imaged again and again (40 repeats).
 For each cell of interest and each repeat it reports how bright each HCR channel
 is and how many transcripts that corresponds to, so you can see how fast each
-probe bleaches.
+probe bleaches. A second mode handles **group experiments** -- one image per
+worm, worms of several groups imaged on several days -- and writes the
+transcripts per image and channel as a CSV ([section 16](#16-group-experiments)).
 
 This page explains **what happens to the images, step by step**, in plain
 language, with pictures of the real data after each step. No image-processing
@@ -29,12 +31,13 @@ in the [glossary](#glossary) at the end.
 8. [From signal to transcripts](#8-from-signal-to-transcripts)
 9. [Following the cells across the 40 repeats](#9-following-the-cells-across-the-40-repeats)
 10. [Bleaching curves and fits](#10-bleaching-curves-and-fits)
-11. [What you get (outputs)](#11-what-you-get-outputs)
-12. [All settings](#12-all-settings)
-13. [Limits — what the numbers cannot be trusted for](#13-limits)
-14. [Running it](#14-running-it)
-15. [Group experiments](#15-group-experiments)
-16. [Glossary](#glossary)
+11. [Looking at the images](#11-looking-at-the-images)
+12. [What you get (outputs)](#12-what-you-get-outputs)
+13. [All settings](#13-all-settings)
+14. [Limits — what the numbers cannot be trusted for](#14-limits)
+15. [Running it](#15-running-it)
+16. [Group experiments](#16-group-experiments)
+17. [Glossary](#glossary)
 
 ---
 
@@ -48,7 +51,7 @@ sections stacked on top of each other) with four channels:
 | C0 | **daf-28** HCR | finding the cells (it fills the ASI/ASJ somata) and its own measurements |
 | C1 | **ins-4** HCR | measurements |
 | C2 | **ins-6** HCR | measurements, and choosing the cells of interest |
-| C3 | DAPI (nuclei) | display only |
+| C3 | DAPI (nuclei) | display; in group experiments also the drift and same-worm checks (section 16) |
 
 Voxel size: 0.099 × 0.099 µm in x/y, 0.5 µm in z (a *voxel* is a 3D pixel). All
 distances below are in µm and converted to voxels using these sizes, so the
@@ -186,7 +189,8 @@ Spots are found separately in each HCR channel, inside the reference region:
    in z). What survives is structure about the size of a spot; smooth background
    and pixel-to-pixel noise both cancel out. Spots light up; everything else goes dark.
 3. **Candidates** (panel 3): every local peak of the filtered image (brighter than
-   everything within 0.2 µm) that is above 3 × the noise. The noise level is
+   everything within 0.2 µm in x/y and one slice, 0.5 µm, in z) that is above
+   3 × the noise. The noise level is
    measured robustly with the *MAD* (median absolute deviation), which ignores the
    few real spots. This deliberately lets in many noise peaks.
 4. **Final spots** (panel 4): the candidates above the **elbow threshold**:
@@ -213,7 +217,8 @@ For each cell of interest and each HCR channel:
 | `<channel>_mean_au` | Mean brightness inside the cell (a.u. = arbitrary units, the camera's numbers). |
 | `<channel>_background_au` | **Local background**: the median brightness in a thin *shell* 0.5–2 µm outside the cell (blue above). Each shell voxel belongs to its nearest cell, so two neighbouring cells never share background. The median ignores stray bright spots in the shell. |
 | `<channel>_mean_bgsub_au` | Mean minus background: the cell's own signal. **This is the "intensity" in the plots.** |
-| `<channel>_integrated_bgsub_au` | The same, summed over the whole cell (total signal). |
+| `<channel>_integrated_au` | The brightness summed over the whole cell. |
+| `<channel>_integrated_bgsub_au` | The same minus the background of every voxel (the cell's total own signal). |
 | `<channel>_spots` | Spots (section 6) whose centre lies inside the cell. |
 | `<channel>_saturated_fraction` | Share of the cell's voxels at the camera's maximum (255): those voxels were brighter than the camera can record, so the true signal is higher. |
 | `volume_um3`, `centroid_*_um` | Cell volume (µm³) and centre position (µm). |
@@ -235,11 +240,13 @@ transcript:
    minus the local background.
 3. The **median** of those sums is "one transcript's worth" of signal.
 4. **Transcripts in a cell ≈ the cell's total background-corrected signal ÷ one
-   transcript's signal** (column `<channel>_transcripts_est`).
+   transcript's signal** (column `<channel>_transcripts_est`; the single-spot
+   signal and how many isolated spots it is the median of are in
+   `<channel>_ref_spot_au` and `<channel>_n_ref_spots`).
 
 This is the dense-region method of the Big-FISH package. It is recomputed at
 every repeat, from that repeat's own isolated spots — see the limits in
-[section 13](#13-limits): if isolated spots bleach at a different rate than the
+[section 14](#14-limits): if isolated spots bleach at a different rate than the
 cells, the estimate drifts over the series.
 
 ---
@@ -325,7 +332,61 @@ correlation. From the command line: `pixi run series -- --compare-counting`.
 
 ---
 
-## 11. What you get (outputs)
+## 11. Looking at the images
+
+The **Display** panel on the right sets what you see; the views in the middle show it.
+
+**Channels.** One histogram with every channel in its own colour, with a
+draggable min and max handle per channel; and per channel: show / hide, colour
+table, opacity, min, max and gamma. They apply to every view, 2D and 3D, and
+are saved with the session.
+
+| Control | What it does |
+|---|---|
+| **min / max** | Brightness at or below *min* is black, at or above *max* full colour, in between a ramp. The default *min* is the elbow of the channel's brightness (the same automatic cut as the spot threshold, section 6), so the background is black; the default *max* is about the 99.95th percentile. |
+| **gamma** | Bends the ramp between min and max without moving its ends (brightness *n* between 0 and 1 becomes *n*<sup>1/γ</sup>): γ above 1 lifts faint signal (0.25 becomes 0.5 at γ = 2) without saturating bright signal; γ below 1 darkens it. |
+| **opacity** | Scales the whole channel evenly, brightest included. The channels are *added* together, so opacity sets how much each one contributes to the mix -- e.g. turn daf-28 down to see ins-6 in the same cells. |
+
+**Views** (tabs under the image):
+
+| View | What it shows |
+|---|---|
+| **Slice** | One z-section at a time (scroll through the stack), with the cell outlines, their labels (`A · ASIL` once named) and the spots of the chosen channel. |
+| **MIP** | The *maximum-intensity projection*: for every pixel, each channel's brightest value through the whole stack, combined as above; the outlines of the projected cells and every spot. |
+| **Ortho** | Three sections through one point -- XY, XZ and YZ; click any pane to move the point. Cells as see-through fills, spots near each plane. It starts on the cells. The XZ and YZ panes are thin strips: the stack is about 19 µm deep but 100 µm across (right-drag to zoom). |
+| **3D** | The image as a volume, the cells as surfaces, the spots as small spheres (drag to rotate, scroll to zoom). |
+
+**3D rendering** (the *3D* controls):
+
+- **Additive (napari-style MIP)**, the default: for every pixel, each channel's
+  brightest point along the line of sight, coloured as above, and the channels'
+  colours added. Nothing hides anything; overlaps mix (magenta + cyan = white).
+- **Composite (depth)**: see-through -- nearer voxels partly hide the ones
+  behind them, so shapes and depth show.
+
+*Image in 3D* turns the volume on or off; *Image opacity in 3D* is its overall
+strength in additive mode (0.5 = as the channel controls set it) and how opaque
+the brightest voxels are in composite mode (lower: see deeper); *Cell surface
+opacity* sets the cells' surfaces (0 hides them). Below a channel's *min* the
+volume is clear: raise a channel's min to remove its background haze in 3D.
+The volume is built at half resolution in x / y, so it stays quick.
+
+**Timepoints.** After *Run series*, the timepoint browser at the top of the
+Display panel shows any repeat with its own cells and spots (cells not followed
+at that repeat are grey). With *Auto contrast per timepoint* off (the default)
+every repeat keeps the same min / max, so bleaching shows as dimming.
+
+**Loading.** The slice you look at is read first and shown at once; the rest
+load in the background ("All slices loaded" in the log), and MIP, Ortho and 3D
+fill in from them.
+
+**Plots and the results table** open in their own windows, only when you press
+*Open plot window* or *Open results table* (step 6): after a run they are filled
+but not opened.
+
+---
+
+## 12. What you get (outputs)
 
 | File | Content |
 |---|---|
@@ -338,7 +399,7 @@ correlation. From the command line: `pixi run series -- --compare-counting`.
 
 ---
 
-## 12. All settings
+## 13. All settings
 
 | Setting | Default | Where | What it changes |
 |---|---|---|---|
@@ -352,7 +413,7 @@ correlation. From the command line: `pixi run series -- --compare-counting`.
 | Track cells within | 3 µm | Segment cells | Matching distance between repeats (section 9) |
 | ROI margin x/y, z | 8 µm, 3 µm | ROI and spots | The amber box (section 5) |
 | Reference margin x/y, z | 25 µm, 10 µm | ROI and spots | The grey box: spots and the single-spot reference (sections 6, 8) |
-| Parallel workers | 4 | Run series | Repeats processed at the same time (~2.5 GB of memory each) |
+| Parallel workers | up to 4 (half the CPUs, as many as the free memory holds) | Run series | Repeats processed at the same time (~2.5 GB of memory each) |
 
 Fixed in the recipe (`recipes/*.toml`): spot size 0.12 µm (x/y) and 0.35 µm (z);
 spot separation 0.2 µm; background shell 0.5–2 µm; isolation for reference spots
@@ -360,7 +421,7 @@ spot separation 0.2 µm; background shell 0.5–2 µm; isolation for reference s
 
 ---
 
-## 13. Limits
+## 14. Limits
 
 What the numbers **cannot** be trusted for, or need care with:
 
@@ -385,20 +446,22 @@ What the numbers **cannot** be trusted for, or need care with:
 
 ---
 
-## 14. Running it
+## 15. Running it
 
 ```bash
 pixi run gui                      # the app (Load → Segment cells → … → Plots)
 pixi run series                   # all samples in originals/, no window (results in out/)
 pixi run series -- --workers 4    # the same, 4 repeats at a time
-pixi run gui-groups <folder>      # a group experiment (section 15); `gui <folder>` detects it too
+pixi run gui-groups <folder>      # a group experiment (section 16)
+pixi run python -m hcrcells.launch <folder>   # any folder: the experiment type is detected
+                                  # (`pixi run gui` always opens originals/)
 pixi run groups <folder> <out>    # the same without a window
 pixi run python scripts/make_readme_figures.py   # regenerate the pictures on this page
 ```
 
 ---
 
-## 15. Group experiments
+## 16. Group experiments
 
 The second kind of experiment: worms of several **groups** (e.g. N2, ins-6,
 ins-6 rescue), **one image per worm**, imaged on several days. The result is one
@@ -470,14 +533,14 @@ again; images already run with the same settings are not run again.
 **The selection rule in a mutant.** By default cells without ins-6 signal are left
 out (section 5). In a group that lacks ins-6 (an ins-6 mutant) that would leave out
 every cell: a warning says so when the rule leaves out far more cells in one group
-than in the others. Choose another channel under *Cells without* (step 3) or
+than in the others. Choose another channel under *Exclude cells without* (step 3) or
 include the cells by hand.
 
 **Outputs** (in the output folder):
 
 | File | Content |
 |---|---|
-| `transcripts_per_image.csv` | **The result.** One row per image used: `date`, `day`, `group`, `worm`, `file`, `drift_um`, `drift_decision`, `n_cells` (cells of interest), and per channel `<ch>_dots` (spot peaks) and `<ch>_transcripts` (Big-FISH estimate), summed over the cells of interest. Then per neuron, `ASIL_ins6_dots`, `ASIL_ins6_transcripts`, … for ASIL, ASIR, ASJL, ASJR (empty until named). An image without a cell of interest has `n_cells` 0 and empty counts. |
+| `transcripts_per_image.csv` | **The result.** One row per image used: `image` (its id: day folder and file name), `date`, `day`, `group`, `worm`, `file`, `drift_um`, `drift_decision`, `n_cells` (cells of interest), and per channel `<ch>_dots` (spot peaks) and `<ch>_transcripts` (Big-FISH estimate), summed over the cells of interest. Then per neuron, `ASIL_ins6_dots`, `ASIL_ins6_transcripts`, … for ASIL, ASIR, ASJL, ASJR (empty until named). An image without a cell of interest has `n_cells` 0 and empty counts. |
 | `cells.csv` | One row per cell of every image used: its identity, whether it counts (`included`, the rule, your choice) and every measurement of section 7. |
 | `images_qc.csv` | Every image found: day, group as written and as read, worm, drift, duplicate, `analysed`, and the reason when not. |
 | `warnings.json`, `settings.json` | The warnings; every setting and choice the CSVs were made with. |
@@ -497,15 +560,18 @@ always matches what the app shows.
 | **Background shell** | A thin layer around a cell (0.5–2 µm out) whose median brightness is the cell's local background. |
 | **Difference of Gaussians (DoG)** | Narrow blur minus broad blur: keeps structures of one size (here: spots) and removes both finer noise and broader background. |
 | **Elbow threshold** | The automatic cut between "many weak peaks" (noise) and "few strong peaks" (spots) on the count-versus-threshold curve. |
+| **Gamma** | A curve applied to the displayed brightness between min and max: above 1 lifts faint signal, below 1 darkens it; display only, the measurements never use it. |
 | **Gaussian blur** | Replacing each voxel by a weighted average of its neighbours, with weights falling off as a bell curve; its width (sigma) sets how much is blurred. |
 | **MAD** | Median absolute deviation: a measure of spread (noise) that, unlike the standard deviation, is not inflated by a few very bright values. |
 | **Mask** | A yes/no image: each voxel is either "cell" or "background". |
+| **Maximum-intensity projection (MIP)** | For every pixel, the brightest value along the line of sight through the stack (the MIP tab: along z; the additive 3D rendering: along the current viewing direction). |
 | **Opening** | Shrinking a mask's shapes then growing them back: removes anything thinner than the shrink distance. |
 | **Otsu's method** | Automatic choice of the brightness cut that best separates two groups of voxels. |
 | **Phase correlation** | A way to find how far one image is shifted against another, to a fraction of a pixel, from the two images' frequency content. |
 | **Registration** | Moving images (here: the slices of a stack) so that the same structures line up. |
 | **Reference region / ROI** | The two boxes around the cells of interest (section 5). |
 | **Segmentation** | Deciding which voxels belong to which cell. |
+| **Volume rendering** | Drawing a 3D image directly as a semi-transparent cloud of coloured voxels (the 3D tab), rather than as surfaces. |
 | **Voxel** | A 3D pixel (0.099 × 0.099 × 0.5 µm here). |
 | **Watershed** | Splitting an object by growing regions from seed points until they meet (section 4). |
 | **z-stack** | A 3D image made of optical sections taken at increasing depths. |

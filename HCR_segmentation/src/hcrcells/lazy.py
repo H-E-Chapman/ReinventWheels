@@ -98,6 +98,18 @@ class LazyChannel(LazyPlaneVolume):
                 return
             self._plane(z)
 
+    def projection(self) -> np.ndarray:
+        """Maximum along z over the slices read so far (all of them once
+        :attr:`complete`): the MIP, without forcing the rest to be read now."""
+        with self._cache_lock:
+            planes = list(self._cache.values())
+        if not planes:
+            return np.zeros(self.shape[1:], self.dtype)
+        out = planes[0].copy()
+        for plane in planes[1:]:
+            np.maximum(out, plane, out=out)
+        return out
+
     def loaded_sample(self, step: int = 4) -> np.ndarray:
         """The slices read so far, every `step`-th pixel: for histograms and the
         display min / max before the whole stack is in."""

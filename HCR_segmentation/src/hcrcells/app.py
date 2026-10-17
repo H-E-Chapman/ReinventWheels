@@ -39,7 +39,8 @@ from vanua.core.layers import ImageLayer, LayerStack
 from PyQt5.QtCore import QObject, Qt, QTimer, pyqtSignal
 
 from .lazy import LazyOutlines, LazyPositions, open_lazy_channels, sample_for_contrast, tiff_frame
-from .display import (CellLabelOverlay, ChannelPanel, RoiOverlay, SliceCompositor, SpotColorPicker, install_checkmark_style,
+from .display import (CellLabelOverlay, ChannelPanel, MipCompositor, OrthoCompositor, RoiOverlay, SliceCompositor,
+                      Volume3D, RENDER_MODES, frame_bounds, SpotColorPicker, install_checkmark_style,
                       label_positions, label_slice_slider, lut_color)
 from PyQt5.QtWidgets import (QApplication, QCheckBox, QComboBox, QFileDialog, QHBoxLayout, QLabel, QLineEdit,
                              QSlider,
@@ -52,7 +53,7 @@ from .pipeline import (CELLS_RECIPE_PATH, CHANNEL_INDEX, CHANNELS, GENE, IDENTIT
 from .session import (SessionStore, clear_timepoints, file_sha256, fingerprint, load_timepoint, restore_bundle,
                       stage_index)
 from .plotwindow import PlotWindow, ResultsWindow
-from .series import (CENTROID, export_cells, name_first, sample_id, save_timepoint_view, spots_in_volume,
+from .series import (CENTROID, export_cells, update_identities, name_first, sample_id, save_timepoint_view, spots_in_volume,
                      sample_series, track_series)
 
 IDENTITY_COL, INCLUDE_COL = 1, 6  # Select cells table: the Identity drop-down, the Include tick
@@ -209,9 +210,9 @@ class HcrCellsApp(QObject):
                       "<b>Detect spots in ROI</b>: spots are found only inside it.", page=3, done=self.roi_done),
             GuideStep(self.run_button, f"Click <b>Run series and export</b> (demo: T=0..{DEMO_LAST_T}); each "
                       "timepoint follows the cells and detects spots in their ROI.", page=4, done=self.series_done),
-            GuideStep(self.open_plots_button, "The plots open in their own window: pick per cell, the mean "
-                      "of the cells, or the batch-effect check; <b>Advanced plot settings</b> has every option. "
-                      "Click <b>Open plot window</b> to bring it back.", page=5),
+            GuideStep(self.open_plots_button, "Click <b>Open plot window</b>: the plots open in their own "
+                      "window -- per cell, the mean of the cells, or the batch-effect check; <b>Advanced plot "
+                      "settings</b> has every option. <b>Open results table</b> shows the numbers.", page=5),
         ], settings_key=DEMO_KEY)
         self.tour.mode_changed.connect(self._apply_demo_presets)
         self._apply_demo_presets(self.tour.enabled)
@@ -318,7 +319,8 @@ class HcrCellsApp(QObject):
         self.open_plots_button.clicked.connect(self.open_plot_window)
         self.open_results_button = QPushButton("Open results table")
         self.open_results_button.clicked.connect(self.open_results_window)
-        self.plot_note = _label("The plots and the results table open in their own windows after a series run. "
+        self.plot_note = _label("After a series run, <b>Open plot window</b> and <b>Open results table</b> show "
+                                "the results, each in its own window. "
                                 "Plots: per cell, mean of cells, or the batch-effect check; normalized or "
                                 "absolute values; export (PNG, TIFF, PDF, SVG, …). Table: sort by any column; "
                                 "export CSV or Excel.")
@@ -333,6 +335,37 @@ class HcrCellsApp(QObject):
         self.layers = LayerStack()
         self.layer_panel = ChannelPanel(self.layers)
         self.compositor = SliceCompositor(self.layers, self.viewer.slice_viewer)
+        # The other tabs: vanua's MIP and Ortho viewers show nothing until given
+        # a volume (and then one channel); these paint the same composite there.
+        tabs = self.viewer.as_widget()
+        self.mip_compositor = MipCompositor(self.layers, self.viewer.mip_viewer, tabs)
+        self.ortho_compositor = OrthoCompositor(self.layers, self.viewer.ortho_viewer, tabs,
+                                                slice_viewer=self.viewer.slice_viewer)
+        self.volume_3d = Volume3D(self.layers, self.viewer, lambda: getattr(self, "frame", None), tab_index=TAB_3D)
+        # 3D: the composite of the channels above (their LUT, min / max, gamma, opacity, visibility).
+        self.volume_check = QCheckBox("Image in 3D")
+        self.volume_check.setChecked(True)
+        self.volume_check.setToolTip("The image in the 3D tab as the same colour composite as the 2D views, set "
+                                     "by the channel controls above; below a channel's min it is clear")
+        self.volume_check.toggled.connect(self.volume_3d.set_enabled)
+        self.render_mode = QComboBox()
+        for key, text in RENDER_MODES.items():
+            self.render_mode.addItem(text, key)
+        self.render_mode.setToolTip("Additive: each channel's brightest point along the view, the channels' "
+                                    "colours added (napari's look). Composite: see-through, near voxels hide "
+                                    "far ones (depth).")
+        self.render_mode.currentIndexChanged.connect(lambda _i: self.volume_3d.set_mode(self.render_mode.currentData()))
+        self.volume_density = QSlider(Qt.Horizontal)
+        self.volume_density.setRange(5, 100)
+        self.volume_density.setValue(50)
+        self.volume_density.setToolTip("3D opacity: how opaque the brightest voxels are (lower: see deeper "
+                                       "into the volume and the cells / spots inside it)")
+        self.volume_density.valueChanged.connect(lambda v: self.volume_3d.set_density(v / 100.0))
+        self.surface_opacity = QSlider(Qt.Horizontal)
+        self.surface_opacity.setRange(0, 100)
+        self.surface_opacity.setValue(50)
+        self.surface_opacity.setToolTip("How opaque the segmented cells' surfaces are in 3D (0: hidden)")
+        self.surface_opacity.valueChanged.connect(lambda v: self._set_surface_opacity(v / 100.0))
         self._label_sliders()
         self.show_outlines = QCheckBox("Cell outlines")
         self.show_outlines.setChecked(True)
@@ -386,9 +419,20 @@ class HcrCellsApp(QObject):
                           self.tp_status, QLabel("<b>Channels</b>"), self.layer_panel, QLabel("<b>Overlays</b>"),
                           self.show_outlines, self.show_cell_labels, self.show_spots, self.show_spots_3d,
                           QLabel("Spots of channel"), self.spot_combo, QLabel("Spot colour"), self.spot_color,
-                          self.display_note)
+                          QLabel("<b>3D</b>"), self.volume_check, QLabel("Rendering"), self.render_mode,
+                          QLabel("Image opacity in 3D"), self.volume_density,
+                          QLabel("Cell surface opacity"), self.surface_opacity, self.display_note)
         self._update_auto_spot_color()
         return page
+
+    def _set_surface_opacity(self, opacity: float) -> None:
+        """The cell surfaces in 3D: more or less see-through (the slider)."""
+        v3 = self.viewer.viewer_3d
+        for actor in self.surface_actors:
+            actor.GetProperty().SetOpacity(opacity)
+            actor.SetVisibility(opacity > 0)
+        if v3 is not None:
+            v3.render()
 
     def _spot_channel_rgb(self) -> "tuple[int, int, int]":
         """The current spot channel's display colour (its layer's LUT)."""
@@ -783,8 +827,8 @@ class HcrCellsApp(QObject):
             self.results[self.sample] = apply_identities(self.results[self.sample], named)
             path = self.result_paths.get(self.sample)
             if path is not None and not self._restoring:
-                try:
-                    self.results[self.sample].to_csv(path, index=False)
+                try:  # the CSV and its provenance (columns, identities) together
+                    update_identities(self.results[self.sample], path)
                 except OSError as exc:
                     self.window.append_log(f"Could not update {path.name}: {exc}")
             if self.plot_window.results:
@@ -958,7 +1002,7 @@ class HcrCellsApp(QObject):
         self.window.set_step_enabled(5, True)
         self.window.set_current_step(5)
         self._set_tp_enabled(True)
-        self.show_plot()
+        self.show_plot()  # results into the plot and table windows; they open only from their buttons
         self.series_done.emit()
 
     def _load_other_samples(self, out: Path) -> None:
@@ -1057,7 +1101,10 @@ class HcrCellsApp(QObject):
                                 for ch, c in self.spot_color_choice.items()},
                 "z": int(self.viewer.slice_viewer.current_z), "tab": self.viewer.as_widget().currentIndex(),
                 "plot_window": self.plot_window.state(), "results_window": self.results_window.state(),
-                "timepoint": self.tp_view["t"] if self.tp_view else None, "tp_auto": self.tp_auto.isChecked()}
+                "timepoint": self.tp_view["t"] if self.tp_view else None, "tp_auto": self.tp_auto.isChecked(),
+                "volume_3d": self.volume_check.isChecked(), "volume_density": self.volume_density.value(),
+                "render_mode": self.render_mode.currentData(),
+                "surface_opacity": self.surface_opacity.value()}
 
     def _apply_display(self, display: dict, view: bool) -> None:
         """Channels, overlays and spot colours; with `view`, also z, tab and plot
@@ -1091,13 +1138,16 @@ class HcrCellsApp(QObject):
         if display.get("plot_window"):
             self.plot_window.apply_state(display["plot_window"])
             if self.sample in self.results:
-                self.show_plot(open_window=False)
-                if display["plot_window"].get("open", True):
-                    self.open_plot_window()
-                results_state = display.get("results_window") or {}
-                self.results_window.apply_state(results_state)
-                if results_state.get("open", True):
-                    self.open_results_window()
+                # Filled, not opened: the windows open only when you press their buttons.
+                self.show_plot()
+                self.results_window.apply_state(display.get("results_window") or {})
+        if display.get("render_mode") in RENDER_MODES:
+            self.render_mode.setCurrentIndex(self.render_mode.findData(display["render_mode"]))
+        for key, widget, setter in (("volume_3d", self.volume_check, "setChecked"),
+                                    ("volume_density", self.volume_density, "setValue"),
+                                    ("surface_opacity", self.surface_opacity, "setValue")):
+            if key in display:
+                getattr(widget, setter)(display[key])
         if "tp_auto" in display:
             self.tp_auto.blockSignals(True)
             self.tp_auto.setChecked(bool(display["tp_auto"]))
@@ -1118,6 +1168,10 @@ class HcrCellsApp(QObject):
             box.toggled.connect(changed)
         self.spot_combo.currentIndexChanged.connect(changed)
         self.spot_color.colorChanged.connect(changed)
+        self.volume_check.toggled.connect(changed)
+        self.volume_density.valueChanged.connect(changed)
+        self.surface_opacity.valueChanged.connect(changed)
+        self.render_mode.currentIndexChanged.connect(changed)
         self.compositor.z_listeners.append(changed)
         self.viewer.as_widget().currentChanged.connect(changed)
         self.plot_window.optionsChanged.connect(changed)
@@ -1140,8 +1194,9 @@ class HcrCellsApp(QObject):
 
     # -- 5 plots ----------------------------------------------------------------------
 
-    def show_plot(self, open_window: bool = True) -> None:
-        """Results to the plot window (opened unless `open_window` is False) and the table."""
+    def show_plot(self, open_window: bool = False) -> None:
+        """Results to the plot window and the table; they are opened only with
+        `open_window` (their buttons in step 6 open them otherwise)."""
         if self.sample not in self.results:
             return
         self.plot_window.set_results(self.results, self.sample, self.result_paths)
@@ -1193,6 +1248,18 @@ class HcrCellsApp(QObject):
             return
         sv.set_overlay_labels(self.outlines, self.label_colors, {i: 255 for i in self.label_colors})
         sv.set_label_names(self._label_names())
+        self._update_view_overlays()
+
+    def _update_view_overlays(self) -> None:
+        """The cells and spots of the image shown, on the MIP and Ortho tabs too."""
+        labels = None
+        if self.first is not None and self.show_outlines.isChecked():
+            labels = self.tp_view["cells"] if self.tp_view is not None else self.first[1]["cells"]
+        spots, _ch = self._spots()
+        points = (spots[["z_index", "y_index", "x_index"]].to_numpy(float)
+                  if spots is not None and self.show_spots.isChecked() and len(spots) else None)
+        for view in (self.mip_compositor, self.ortho_compositor):
+            view.set_overlays(labels, self.label_colors, points, self.spot_color.color())
 
     def _label_names(self) -> dict:
         """{label: cell name} of the timepoint shown (tracked cells only after the first)."""
@@ -1214,6 +1281,7 @@ class HcrCellsApp(QObject):
     def _show_spots(self) -> None:
         spots, ch = self._spots()
         sv = self.viewer.slice_viewer
+        self._update_view_overlays()
         if spots is None or not self.show_spots.isChecked():
             sv.set_skeleton_points(None)
             return
@@ -1430,6 +1498,8 @@ class HcrCellsApp(QObject):
                         self.layers.replace_at(self.layers.index_of(name), dc_replace(layer, contrast_range=full))
             self.layer_panel.refresh_histograms()
             self.compositor.refresh()
+            for view in (self.mip_compositor, self.ortho_compositor, self.volume_3d):
+                view.refresh()  # the projection / volume from every slice now
             self.window.append_log("All slices loaded")
 
         if self.synchronous:
@@ -1493,7 +1563,9 @@ class HcrCellsApp(QObject):
     def _on_surfaces(self, mesh) -> None:
         self._clear_3d()
         self.surface_actors = add_label_surfaces(self.viewer.viewer_3d, mesh, colors=self.label_colors,
-                                                 opacity=0.45)
+                                                 opacity=self.surface_opacity.value() / 100.0)
+        self._set_surface_opacity(self.surface_opacity.value() / 100.0)
+        frame_bounds(self.viewer.viewer_3d, self.viewer.viewer_3d.bounds)  # the cells, not the image's whole field
         self._show_spots_3d()
         self._show_cell_labels_3d()
         self.window.append_log(f"{len(self.surface_actors)} cell surfaces in the 3D tab")
@@ -1664,6 +1736,7 @@ def initialize_3d(app_obj: HcrCellsApp) -> None:
     if app_obj.viewer.viewer_3d is not None:
         app_obj.viewer.viewer_3d.set_orientation_labels("X+", "X-", "Y+", "Y-", "Z+", "Z-")
         app_obj.window.append_log(f"3D view ready ({time.perf_counter() - started:.1f} s)")
+        app_obj.volume_3d.refresh()
         if app_obj.first is not None:
             app_obj.build_surfaces()  # segmented before the 3D tab existed
 

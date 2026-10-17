@@ -39,11 +39,13 @@ from vanua.ui.workers import OpWorkerThread
 from vanua.core.layers import ImageLayer, LayerStack
 
 from PyQt5.QtCore import QObject, Qt, QTimer, pyqtSignal
-from PyQt5.QtWidgets import (QApplication, QCheckBox, QComboBox, QFileDialog, QHBoxLayout, QLabel, QLineEdit,
+from PyQt5.QtWidgets import (QApplication, QCheckBox, QComboBox, QFileDialog, QHBoxLayout, QLabel, QLineEdit, QSlider,
                              QPushButton, QSpinBox, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 
 from .app import LAYERS, SPOT_CHANNELS, _column, _label, _row, default_contrast, theme_color
-from .display import CellLabelOverlay, ChannelPanel, SliceCompositor, install_checkmark_style, label_slice_slider
+from .display import (CellLabelOverlay, ChannelPanel, MipCompositor, OrthoCompositor, SliceCompositor, Volume3D, RENDER_MODES,
+                      frame_bounds,
+                      install_checkmark_style, label_slice_slider)
 from .groups import (GroupSettings, cell_results, check_images, check_warnings, decide, find_duplicates,
                      load_runs, naming_warnings, rule_warnings, run_images, scan, write_results)
 from .lazy import LazyOutlines, LazyPositions, open_lazy_channels, sample_for_contrast, tiff_frame
@@ -59,6 +61,7 @@ STATE_FILE = "groups_state.json"
 IMAGE_COLUMNS = ["Day", "File", "Group", "Worm", "Drift (µm)", "Drift check", "Same worm as", "Use", "Reason"]
 GROUP_COL, USE_COL = 2, 7
 IDENTITY_COL, INCLUDE_COL = 1, 6  # review table
+TAB_3D = 3  # MultiViewHost tabs: Slice, MIP, Ortho, 3D
 
 
 def detect_experiment(folder: "str | Path") -> str:
@@ -292,6 +295,36 @@ class GroupsApp(QObject):
         self.layers = LayerStack()
         self.layer_panel = ChannelPanel(self.layers)
         self.compositor = SliceCompositor(self.layers, self.viewer.slice_viewer)
+        tabs = self.viewer.as_widget()
+        self.mip_compositor = MipCompositor(self.layers, self.viewer.mip_viewer, tabs)
+        self.ortho_compositor = OrthoCompositor(self.layers, self.viewer.ortho_viewer, tabs,
+                                                slice_viewer=self.viewer.slice_viewer)
+        self.volume_3d = Volume3D(self.layers, self.viewer, lambda: self.frame, tab_index=TAB_3D)
+        # 3D: the composite of the channels above (their LUT, min / max, gamma, opacity, visibility).
+        self.volume_check = QCheckBox("Image in 3D")
+        self.volume_check.setChecked(True)
+        self.volume_check.setToolTip("The image in the 3D tab as the same colour composite as the 2D views, set "
+                                     "by the channel controls above; below a channel's min it is clear")
+        self.volume_check.toggled.connect(self.volume_3d.set_enabled)
+        self.render_mode = QComboBox()
+        for key, text in RENDER_MODES.items():
+            self.render_mode.addItem(text, key)
+        self.render_mode.setToolTip("Additive: each channel's brightest point along the view, the channels' "
+                                    "colours added (napari's look). Composite: see-through, near voxels hide "
+                                    "far ones (depth).")
+        self.render_mode.currentIndexChanged.connect(lambda _i: self.volume_3d.set_mode(self.render_mode.currentData()))
+        self.volume_density = QSlider(Qt.Horizontal)
+        self.volume_density.setRange(5, 100)
+        self.volume_density.setValue(50)
+        self.volume_density.setToolTip("3D opacity: how opaque the brightest voxels are (lower: see deeper "
+                                       "into the volume and the cells / spots inside it)")
+        self.volume_density.valueChanged.connect(lambda v: self.volume_3d.set_density(v / 100.0))
+        self.surface_opacity = QSlider(Qt.Horizontal)
+        self.surface_opacity.setRange(0, 100)
+        self.surface_opacity.setValue(50)
+        self.surface_opacity.setToolTip("How opaque the segmented cells' surfaces are in 3D (0: hidden)")
+        self.surface_opacity.valueChanged.connect(lambda v: self._set_surface_opacity(v / 100.0))
+        self._3d_actors: list = []
         label_slice_slider(self.viewer.slice_viewer, "Z", lambda: self._step_um(0))
         self.cell_labels = CellLabelOverlay(self.viewer.slice_viewer)
         self.compositor.z_listeners.append(self.cell_labels.refresh)
@@ -310,7 +343,9 @@ class GroupsApp(QObject):
         self.display_status = _label("")
         page, _ = _column(self.display_status, QLabel("<b>Channels</b>"), self.layer_panel, QLabel("<b>Overlays</b>"),
                           self.show_outlines, self.show_cell_labels, self.show_spots, QLabel("Spots of channel"),
-                          self.spot_combo)
+                          self.spot_combo, QLabel("<b>3D</b>"), self.volume_check, QLabel("Rendering"),
+                          self.render_mode, QLabel("Image opacity in 3D"),
+                          self.volume_density, QLabel("Cell surface opacity"), self.surface_opacity)
         return page
 
     # -- paths and state ----------------------------------------------------------------
@@ -665,6 +700,7 @@ class GroupsApp(QObject):
         self.current, self.channels, self.contrast = image, channels, contrast
         self.frame = frame.as_document()
         self._view = view
+        self.build_surfaces()
         spacing = tuple(float(s) for s in frame.spacing()[:3])
         sv = self.viewer.slice_viewer
         sv.set_overlay_labels(None, {}, {})
@@ -688,6 +724,90 @@ class GroupsApp(QObject):
             self.image_combo.blockSignals(False)
         self._fill_cells()
         self._show_overlays()
+
+    # -- 3D: the image as a volume (Volume3D), the cells as surfaces, the spots ---------------
+
+    def initialize_3d(self) -> None:
+        """Create the 3D view (needs a real display) the first time its tab is opened."""
+        if self.viewer.viewer_3d is not None:
+            return
+        tabs = self.viewer.as_widget()
+        tabs.blockSignals(True)
+        try:
+            self.viewer.initialize()
+            tabs.setCurrentIndex(TAB_3D)
+        finally:
+            tabs.blockSignals(False)
+        if self.viewer.viewer_3d is not None:
+            self.viewer.viewer_3d.set_orientation_labels("X+", "X-", "Y+", "Y-", "Z+", "Z-")
+            self.volume_3d.refresh()
+            self.build_surfaces()
+
+    def _set_surface_opacity(self, opacity: float) -> None:
+        """The cell surfaces in 3D: more or less see-through (the slider)."""
+        v3 = self.viewer.viewer_3d
+        for actor in self._3d_actors:
+            actor.GetProperty().SetOpacity(opacity)
+            actor.SetVisibility(opacity > 0)
+        if v3 is not None:
+            v3.render()
+
+    def _clear_3d(self) -> None:
+        from vanua.ui.blocks import clear_label_surfaces
+
+        if self.viewer.viewer_3d is not None and self._3d_actors:
+            clear_label_surfaces(self.viewer.viewer_3d, self._3d_actors)
+        self._3d_actors = []
+        self._3d_spots = None
+
+    def build_surfaces(self) -> None:
+        v3 = self.viewer.viewer_3d
+        if v3 is None:
+            return
+        self._clear_3d()
+        if "labels" not in self._view or self.frame is None:
+            v3.render()
+            return
+        from vanua.blocks.mesh import label_surfaces
+
+        labels, frame, image = self._view["labels"], self.frame, self.current
+
+        def _job(params, ctx, progress, cancel, log):
+            mesh, _table = label_surfaces(labels, frame, step_size=1, cancel=cancel, progress=progress)
+            return image, mesh
+
+        self._start(_job, self._on_surfaces, "Surfaces")
+
+    def _on_surfaces(self, result) -> None:
+        from vanua.ui.blocks import add_label_surfaces
+
+        image, mesh = result
+        if image != self.current or self.viewer.viewer_3d is None:
+            return  # another image is shown by now
+        self._clear_3d()
+        colors = label_colors(np.unique(self._view["labels"]))
+        self._3d_actors = add_label_surfaces(self.viewer.viewer_3d, mesh, colors=colors,
+                                             opacity=self.surface_opacity.value() / 100.0)
+        self._set_surface_opacity(self.surface_opacity.value() / 100.0)
+        frame_bounds(self.viewer.viewer_3d, self.viewer.viewer_3d.bounds)
+        self._show_3d_spots(self._view_overlays()[2])
+
+    def _show_3d_spots(self, points) -> None:
+        v3 = self.viewer.viewer_3d
+        if v3 is None:
+            return
+        from .app import _points_actor
+
+        old = getattr(self, "_3d_spots", None)
+        if old is not None:
+            v3.renderer.RemoveActor(old)
+            self._3d_spots = None
+        if points is not None and len(points) and self.frame is not None:
+            spacing = np.array([self._step_um(i) for i in range(3)], float)
+            actor = _points_actor((points * spacing)[:, ::-1], (255, 255, 0))
+            v3.renderer.AddActor(actor)
+            self._3d_spots = actor
+        v3.render()
 
     def _image_cells(self):
         if self.cells is None or not len(self.cells) or self.current is None:
@@ -774,7 +894,27 @@ class GroupsApp(QObject):
         if len(zs):
             self.viewer.slice_viewer.set_z(int(zs[len(zs) // 2]))
 
+    def _view_overlays(self):
+        """(labels or None, colors, spot points or None) of the image shown."""
+        view, run = self._view, self.runs.get(self.current, {})
+        if not view:
+            return None, {}, None
+        colors = label_colors(np.unique(view["labels"]))
+        labels = view["labels"] if self.show_outlines.isChecked() else None
+        spots = view["spots"].get(SPOT_CHANNELS[self.spot_combo.currentText()])
+        points = None
+        if spots is not None and self.show_spots.isChecked() and len(spots):
+            points = spots[["z_index", "y_index", "x_index"]].to_numpy(float)
+            box = run.get("ref_roi") or run.get("roi")
+            if box:
+                points = points + np.array([box["z"][0], box["y"][0], box["x"][0]], float)
+        return labels, colors, points
+
     def _show_overlays(self) -> None:
+        labels, colors, points = self._view_overlays()
+        for v in (self.mip_compositor, self.ortho_compositor):
+            v.set_overlays(labels, colors, points, (255, 255, 0))
+        self._show_3d_spots(points)
         sv = self.viewer.slice_viewer
         view = self._view
         t = self._image_cells()
@@ -827,6 +967,11 @@ def show(app_obj: GroupsApp, init_3d: bool = False) -> None:
     app_obj.window.resize(1500, 950)
     app_obj.window.show()
     theme.apply_dark_titlebar(app_obj.window)
+    # The 3D view is created the first time its tab is opened (needs the window shown).
+    tabs = app_obj.viewer.as_widget()
+    tabs.currentChanged.connect(lambda i: app_obj.initialize_3d() if i == TAB_3D else None)
+    if init_3d:
+        app_obj.initialize_3d()
 
 
 def main(argv: "list[str] | None" = None) -> int:

@@ -24,6 +24,7 @@ not a wrong number).
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import string
 from pathlib import Path
@@ -407,7 +408,38 @@ def export_cells(cells, out: Path, runs, settings: "Settings | None" = None, ove
                         "in which spots, their threshold, the single-spot reference and the per-cell "
                         "measurements were computed (index ranges per timepoint)"},
         "matching": {"method": "Hungarian on centroid distance, each timepoint to the last known positions",
-                     "max_distance_um": settings.max_distance}})
+                     "max_distance_um": settings.max_distance},
+        "identities": identities_document(cells)})
+
+
+def identities_document(cells) -> dict:
+    """{cell: neuron} of the cells named (the `identity` column), e.g. {'A': 'ASIL'}."""
+    if "identity" not in cells:
+        return {}
+    named = cells[cells["identity"].fillna("").astype(str) != ""]
+    return {str(c): str(i) for c, i in zip(named["cell"], named["identity"])}
+
+
+def update_identities(cells, path: "str | Path") -> Path:
+    """Rewrite a results CSV after cells were (re)named, and bring its
+    provenance sidecar up to date: the output's columns and rows, the
+    identities, and when they were changed. The measurements, and every
+    other record of how they were made, are unchanged."""
+    from datetime import datetime, timezone
+
+    from vanua.blocks.provenance import sidecar_path
+
+    path = Path(path)
+    cells.to_csv(path, index=False)
+    sidecar = sidecar_path(path)
+    if sidecar.exists():
+        document = json.loads(sidecar.read_text(encoding="utf-8"))
+        output = document.setdefault("output", {"path": str(path.resolve())})
+        output.update(rows=int(len(cells)), columns=list(map(str, cells.columns)))
+        document["identities"] = identities_document(cells)
+        document["identities_updated"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        sidecar.write_text(json.dumps(document, indent=2, default=str), encoding="utf-8")
+    return path
 
 
 # -- figures ---------------------------------------------------------------------------
