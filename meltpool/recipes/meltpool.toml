@@ -1,0 +1,71 @@
+schema_version = 1
+name = "meltpool"
+description = "Liquid-gas boundary (vapour-depression rim) per time point from a high-speed X-ray movie"
+
+[[steps]]
+id = "load"
+op = "meltpool.open_movie"
+outputs = { movie = "movie", frame = "frame", frames = "frames" }
+params = { path = "data/synthetic_movie.tif", pixel_um = 4.44, fps = 100000.0, flip_vertical = false }
+
+[[steps]]
+id = "stabilise"
+op = "meltpool.stabilise"
+inputs = { movie = "movie", frames = "frames" }
+outputs = { movie = "stable_movie", shifts = "shifts" }
+params = { enabled = false, mode = "jitter" }
+
+[[steps]]
+id = "crop"
+op = "meltpool.crop"
+inputs = { movie = "stable_movie", frame = "frame" }
+outputs = { movie = "roi_movie", frame = "roi_frame" }
+params = { x0 = 0, x1 = 0, y0 = 0, y1 = 0 }
+
+[[steps]]
+id = "background"
+op = "meltpool.subtract_background"
+inputs = { movie = "roi_movie" }
+outputs = { movie = "analysis_movie", display_movie = "display_movie" }
+params = { enabled = false }
+
+[[steps]]
+id = "boundary"
+op = "meltpool.trace_boundary"
+inputs = { movie = "analysis_movie", frame = "roi_frame", frames = "frames" }
+outputs = { table = "raw_table", profiles = "profiles" }
+params = { n_avg = 3, stride = 1 }
+
+[[steps]]
+id = "flags"
+op = "meltpool.flag_transient"
+inputs = { table = "raw_table" }
+outputs = { table = "table" }
+params = { column = "area_centre_um2", tolerance = 0.10, rolling = 21, late_fraction = 0.5 }
+
+[[steps]]
+id = "dynamics"
+op = "meltpool.dynamics"
+inputs = { table = "table" }
+outputs = { spectrum = "spectrum", peaks = "peaks" }
+params = { detrend = true, n_peaks = 3, steady_only = true }
+
+[[steps]]
+id = "summary"
+op = "meltpool.steady_summary"
+inputs = { table = "table", peaks = "peaks" }
+outputs = { table = "summary" }
+
+[[steps]]
+id = "plot"
+op = "plot.scatter"
+inputs = { table = "table" }
+outputs = { figure = "area_plot" }
+params = { x = "time_ms", y = "depth_centre_um", flag_column = "flagged", title = "Vapour-depression depth, band centre (red: blank / start-up)", out_path = "out/depth_vs_time.png" }
+
+[[steps]]
+id = "overlay"
+op = "meltpool.overlay_movie"
+inputs = { movie = "display_movie", profiles = "profiles" }
+outputs = { movie_file = "overlay" }
+params = { out_path = "out/overlay.mp4" }

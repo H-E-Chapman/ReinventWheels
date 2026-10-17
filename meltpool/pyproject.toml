@@ -1,0 +1,24 @@
+[project]
+name = "meltpool"
+version = "0.1.0"
+description = "Liquid-gas boundary (vapour-depression rim) of a melt pool in high-speed X-ray video: size, profile, dynamics, overlay movie; liquid-solid line (built on vanua)"
+requires-python = ">=3.11"
+dependencies = ["vanua", "pillow"]
+
+[project.optional-dependencies]
+# Readers beyond TIFF and .npy, imported only when such a file is opened.
+formats = ["h5py>=3.10", "av>=12"]
+
+[project.scripts]
+meltpool = "meltpool.app:main"
+meltpool-batch = "meltpool.batch:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

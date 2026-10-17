@@ -1,0 +1,321 @@
+schema_version = 1
+name = "meltpool"
+title = "MeltPool"
+summary = "The liquid-gas boundary (vapour-depression rim) of a melt pool in high-speed X-ray video, frame by frame -- size, profile, dynamics, overlay movie -- and the liquid-solid line on the stabilised median"
+approval = "prototype"
+approval_reason = "Own lab data; the open choice of line (inner edge / band centre / outer edge of the dark rim) is deferred, not guessed: all three are measured and reported, so no number depends on an unconfirmed rule"
+known_limits = [
+  "Radiography is a projection: the boundary is the side-view silhouette of the depression through the sample thickness",
+  "The rim is traced around one centre as a smooth path r(theta) below the surface: a bowl or U-shaped depression; a keyhole deeper than r_max, or one that overhangs (r not single-valued along a ray), is not represented. The EHLA cladding runs (478/479) have no such depression",
+  "The rim is not traced inside the band just below the surface (the surface line's own response); the outline is closed vertically to the surface there",
+  "Inner and outer edges are where the band's intensity is halfway (edge level 0.5) from its minimum to each side, along each ray: they depend on the band's contrast and the edge level",
+  "Per-frame noise: each time point averages n_avg frames (default 3 = 30 us at 100 kfps); the dynamics cannot resolve frequencies above fps / (2 * stride), and averaging attenuates those near fps / n_avg. The spectra use the longest run of steady (unflagged) time points",
+  "Stabilisation registers on the substrate BELOW the pool (automatic region from 20 px under the deepest point of the rim): a region containing the moving boundary would cancel its motion as camera shake. A drawn region must also avoid the pool. Residual on 0.3 px synthetic shake: 0.02-0.07 px (fixed), 0.07-0.10 px (jitter)",
+  "Transient (running-median) frames: a stationary rim cancels in them and a moving one becomes a bright/dark pair, so tracing on them ('display and analysis') measures something different from tracing the plain frames; off, and display-only, by default. The surface and the start centre are always found on the plain frames",
+  "Liquid-solid line (faint, stationary): the automatic search reports a line only if it beats the same search at places without a pool by z >= 3; detection limit ~4-5% line contrast on synthetic data. On weld_0009_middle it is NOT detectable (z ~ 0); hand tracing is available and recorded as manual",
+  "Start-up flags compare the rolling median band-centre area with the late-run median (+-10%): a run that never settles is flagged throughout",
+  "Calibration is entered by hand (weld_0009: 4.44 um/px, 100 000 fps); a frame rate stored in a file is a playback rate and is never used; an export that kept every Nth frame needs recording rate / N",
+  "Flat-field-normalised 8-bit visualisation exports (the lab's *_EHLA.avi) are read, but the rim contrast in them is not validated",
+]
+
+# ---- alignment ---------------------------------------------------------------
+[alignment.intent]
+status = "stated"
+text = "Pick out the liquid-gas boundary (vapour-depression rim) in weld / cladding X-ray videos, frame by frame, and quantify its size, shape and dynamics; also the faint liquid-solid line on the stabilised median. One app (2026-10-17: MeltPool and WeldRim consolidated; the earlier moving-window activity segmentation and drift estimation removed)"
+[alignment.data]
+status = "stated"
+text = "Any of TIFF (one page per frame, memory-mapped), HDF5/NeXus (3D dataset, axis 0 = time), .npy, video (AVI/MP4/MOV/MKV incl. palette AVI, via PyAV); reader chosen by content. weld_0009_middle.avi: 500 frames of 512 x 328, 8-bit palette AVI, build direction up as stored; 4.44 um/px, 100 000 fps (stated). EHLA runs 478/479: 16-bit TIFF, 15214 x 448 x 896, recorded upside down"
+[alignment.stewardship]
+status = "stated"
+text = "Own lab, non-patient experimental data; authorised for local processing with this AI tool. Never committed; derived tables, plots and videos stay under out/ (gitignored)"
+[alignment.measurement]
+status = "stated"
+text = "Per time point and for each of three lines (inner edge, band centre, outer edge): depth below the original surface (um), width at the surface (um), area below the surface (um2), centre column; the boundary profile per frame; dynamics: spectrum and dominant frequencies of depth, width and area; per run: steady-state medians and IQRs; an overlay movie with the lines drawn. Liquid-solid line: depth, width, area on the median"
+[alignment.domain_logic]
+status = "stated"
+text = "The dark phase-contrast rim of the vapour depression is the liquid-gas boundary (user, 2026-10-17); which line of the band is the interface is open, so all three are reported (user's choice). Surface = the original (unmelted) surface, the 80th percentile of the per-column free surface. The liquid-solid boundary is faint and stationary: sub-pixel stabilisation and a temporal median (user's method). Start-up flagged automatically (stated; tolerance assumed); blank frames flagged (assumed)"
+[alignment.ground_truth]
+status = "assumed"
+text = "Synthetic depressions with a known rim band (thickness, depth, width), a known oscillation frequency, shake and start-up; on real video, inspection of the overlay movie"
+[alignment.workflow]
+status = "stated"
+text = "Load -> Calibrate (flip buttons, stabilise with an optional drawn region) -> Crop (drag) -> Transient (optional running-median subtraction) -> Liquid-gas boundary (preview one frame) -> Measure all frames (flags, dynamics) -> Results (time series, spectrum, export, overlay video) -> Liquid-solid. Pages change only when the user clicks"
+[alignment.viewing]
+status = "stated"
+text = "Slice: one averaged frame with the three lines (inner cyan, centre orange, outer magenta), scrub through time; contrast panel (histogram, min/max/gamma, keep per kind of image); MIP / Ortho / 3D of the movie as a (time, y, x) stack (<= 256 MB, every Nth frame beyond; 3D time axis capped at the frame's larger side) with an editable 3D transparency curve; time series and spectrum plots"
+[alignment.delivery]
+status = "stated"
+text = "GUI for one movie + headless batch over a folder (one set of tables per run and a cross-run comparison)"
+[alignment.tools]
+status = "assumed"
+text = "none outside Python; h5py and PyAV (FFmpeg) for HDF5 and video, imported only when needed; Pillow for GIF and the time stamp"
+[alignment.demo]
+status = "stated"
+text = "Yes: guided tutorial mode, synthetic sample loads in one click"
+
+# ---- demo --------------------------------------------------------------------
+[demo]
+enabled = true
+sample = "Load sample button: opens the synthetic weld video (data/synthetic_movie.tif, written by scripts/make_synthetic.py on first use); MELTPOOL_SAMPLE points it at another file"
+[[demo.steps]]
+control = "load_step.sample_button"
+page = 0
+text = "Click <b>Load sample</b> to open a high-speed X-ray movie of a weld pool."
+done = "loaded"
+[[demo.steps]]
+control = "calibrate_step.stabilise_button"
+page = 1
+text = "Click <b>Stabilise now</b>: every frame is aligned to a hundredth of a pixel."
+done = "stabilised"
+[[demo.steps]]
+control = "crop_step.crop_button"
+page = 2
+text = "Click <b>Apply crop</b>: only the region around the pool is analysed."
+done = "cropped"
+[[demo.steps]]
+control = "boundary_step.preview_button"
+page = 4
+text = "Scrub the time slider, then click <b>Preview</b>: the three lines of the rim."
+done = "previewed"
+[[demo.steps]]
+control = "measure_step.run_button"
+page = 5
+text = "Click <b>Trace all frames</b>: depth, width and area over time, start-up flags, the oscillation frequency."
+done = "measured"
+[[demo.steps]]
+control = "results_step.export_button"
+page = 6
+text = "Click <b>Export</b>: tables, profiles, spectrum (each with provenance), plots and the overlay video."
+
+[data.sample]
+source = "Synthetic weld video generated by scripts/make_synthetic.py (meltpool.synthetic); the lab's own videos (C:/Users/HECha/Downloads/EHLA) are opened by the user, never fetched or copied"
+url = ""
+licence = "Synthetic data: generated here, no licence needed. Lab data: unpublished, not redistributable, never committed"
+fetch = "scripts/make_synthetic.py"
+
+# ---- ops ---------------------------------------------------------------------
+[[ops]]
+name = "meltpool.open_movie"
+summary = "Open a movie (TIFF, HDF5, .npy, video -- chosen by content); frame blob with pixel size, fps, flips; per-frame mean and blank flag"
+inputs = {}
+outputs = { movie = "blob", frame = "blob", frames = "table" }
+params = { path = "str", dataset = "str", pixel_um = "float", pixel_from_file = "bool", fps = "float", flip_vertical = "bool", flip_horizontal = "bool", blank_fraction = "float" }
+[[ops]]
+name = "meltpool.stabilise"
+summary = "Sub-pixel stabilisation: every frame registered in x and y on the texture (1/100 px), Fourier-shifted on read; fixed (static sample) or jitter (keeps a steady drift); automatic region below the pool or a drawn one"
+inputs = { movie = "blob", frames = "table" }
+outputs = { movie = "blob", shifts = "table" }
+params = { enabled = "bool", mode = "Literal[jitter,fixed]", x0 = "int", x1 = "int", y0 = "int", y1 = "int", upsample = "int", n_ref = "int", detrend = "int", texture_sigma = "float" }
+[[ops]]
+name = "meltpool.crop"
+summary = "Restrict the movie to a ROI; the frame's origin moves to the ROI's first pixel, so positions stay in full-frame coordinates"
+inputs = { movie = "blob", frame = "blob" }
+outputs = { movie = "blob", frame = "blob" }
+params = { x0 = "int", x1 = "int", y0 = "int", y1 = "int" }
+[[ops]]
+name = "meltpool.subtract_background"
+summary = "Transient features: each frame minus (or divided by) a running median (centred or trailing, recomputed every N frames); display only, or display and analysis"
+inputs = { movie = "blob" }
+outputs = { movie = "blob", display_movie = "blob" }
+params = { enabled = "bool", window = "int", mode = "Literal[centred,trailing]", operation = "Literal[subtract,divide]", every = "int", apply_to = "Literal[display,display and analysis]" }
+[[ops]]
+name = "meltpool.trace_boundary"
+summary = "Per time point: original surface, depression centre (tracked), rim band centre and its inner/outer edges as r(theta); depth, width, area of each line; the profiles"
+inputs = { movie = "blob", frame = "blob", frames = "table" }
+outputs = { table = "table", profiles = "blob" }
+params = { n_avg = "int", stride = "int", start = "int", stop = "int", r_min = "float", r_max = "float", center_x = "int", surface_y = "int", edge_fraction = "float" }
+[[ops]]
+name = "meltpool.flag_transient"
+summary = "Flag blank and start-up time points: steady when the rolling median band-centre area stays within tolerance of the late-run median"
+inputs = { table = "table" }
+outputs = { table = "table" }
+params = { column = "str", tolerance = "float", rolling = "int", late_fraction = "float" }
+[[ops]]
+name = "meltpool.dynamics"
+summary = "Amplitude spectra of depth, width and area of each line over the longest steady run; dominant frequencies"
+inputs = { table = "table" }
+outputs = { spectrum = "table", peaks = "table" }
+params = { detrend = "bool", n_peaks = "int", steady_only = "bool" }
+[[ops]]
+name = "meltpool.steady_summary"
+summary = "Steady-state median and IQR of every depth, width and area column; the dominant depth frequency of each line"
+inputs = { table = "table", peaks = "table" }
+outputs = { table = "table" }
+params = {}
+[[ops]]
+name = "meltpool.overlay_movie"
+summary = "The movie with the traced lines (2 px, inner cyan / centre orange / outer magenta) and a time stamp; MP4 (H.264) or GIF; brightness as on screen in the GUI"
+inputs = { movie = "blob", profiles = "blob" }
+outputs = { movie_file = "file" }
+params = { out_path = "str", fps_out = "float", every = "int", lines = "str", timestamp = "bool", low = "float", high = "float", gamma = "float" }
+[[ops]]
+name = "meltpool.median_image"
+summary = "Per-pixel temporal median of the stabilised, cropped movie"
+inputs = { movie = "blob", frames = "table" }
+outputs = { image = "image" }
+params = { start = "int", stop = "int" }
+[[ops]]
+name = "meltpool.solid_boundary"
+summary = "Liquid-solid line on the median: hand-traced points, or an automatic search reported only if it beats no-pool controls by z_min"
+inputs = { image = "image", frame = "blob", movie = "blob" }
+outputs = { table = "table", line = "blob" }
+params = { points = "str", surface_y = "int", center_x = "int", z_min = "float" }
+[[ops]]
+name = "plot.scatter"
+block = true
+
+[[recipes]]
+file = "recipes/meltpool.toml"
+purpose = "one movie: open -> stabilise -> crop -> transient -> trace -> flags -> dynamics -> summary -> plot -> overlay"
+[[recipes]]
+file = "recipes/solid_boundary.toml"
+purpose = "liquid-solid line: open -> stabilise -> crop -> median -> line"
+[[recipes]]
+file = "recipes/meltpool.toml"
+purpose = "batch: same recipe per movie (meltpool-batch)"
+
+[[steps]]
+title = "Load"
+does = "Pick a movie (or Load sample); the first lit frame and the per-frame mean intensity"
+[[steps]]
+title = "Calibrate"
+does = "Pixel size, fps; flip buttons; sub-pixel stabilisation (fixed / jitter), automatic or drawn region"
+[[steps]]
+title = "Crop"
+does = "Drag a ROI or type it; outline it on the full frame; apply -- every later step sees only the ROI"
+[[steps]]
+title = "Transient"
+does = "Optional: subtract (or divide by) a running median -- the transient features; for display only, or for the analysis too"
+[[steps]]
+title = "Liquid-gas boundary"
+does = "Time slider; preview the three lines on one frame; tune averaging, radius, centre, surface, edge level"
+[[steps]]
+title = "Measure"
+does = "Trace every time point (progress, cancel); flag blank / start-up; spectra"
+[[steps]]
+title = "Results"
+does = "Steady-state summary with the dominant frequency, time series, spectrum, table; export with provenance; overlay video"
+[[steps]]
+title = "Liquid-solid"
+does = "Stabilised median (fine-detail view), trace the line by clicking or search automatically; export CSV + provenance + figure"
+
+[viewer]
+kind = "MultiViewHost"
+overlays = ["lines"]
+surfaces = false
+
+# ---- measurements ------------------------------------------------------------
+[[measurements]]
+id = "M1"
+what = "Depth, width and area of each line (inner edge, band centre, outer edge)"
+unit = "um, um2"
+per = "time point"
+acceptance = "Synthetic depression (rim 3-8 px): each line's depth and half-width within 1.5 px of its truth, area within 5%; through the main recipe, the steady-state depth of each line within 1.5 px"
+test = "tests/test_liquid_gas.py::test_m1_three_lines"
+[[measurements]]
+id = "M2"
+what = "Boundary profile per frame"
+unit = "um"
+per = "time point"
+acceptance = "Profiles exported for every time point and line; the centre line within 2 px (median 1 px) of the synthetic rim"
+test = "tests/test_liquid_gas.py::test_m2_profiles"
+[[measurements]]
+id = "M3"
+what = "Dominant oscillation frequency of depth"
+unit = "Hz"
+per = "run"
+acceptance = "Synthetic depth oscillating at 5 kHz (20 frames at 100 kfps): dominant frequency within one spectral bin for every line, and in the summary"
+test = "tests/test_liquid_gas.py::test_m3_dominant_frequency"
+[[measurements]]
+id = "M4"
+what = "Overlay movie"
+unit = "-"
+per = "run"
+acceptance = "One MP4 (H.264) frame per time point; the three line colours survive compression (lines 2 px); white-on-black time stamp; GIF as an option"
+test = "tests/test_liquid_gas.py::test_m4_overlay_movie"
+[[measurements]]
+id = "M5"
+what = "Blank and start-up flags"
+unit = "-"
+per = "time point"
+acceptance = "Blank frames flagged exactly at load and not traced; a depression growing over 60 frames: the first 60% of the growth flagged as start-up, time points 15 frames after it not flagged"
+test = "tests/test_ops.py::test_m5_flags_start_up"
+[[measurements]]
+id = "M6"
+what = "Frame preserved end to end"
+unit = "-"
+per = "run"
+acceptance = "An oblique, anisotropic, offset frame passes the recipe unchanged; lengths use its spacing"
+test = "tests/test_ops.py::test_m6_frame_round_trip"
+[[measurements]]
+id = "M7"
+what = "Provenance"
+unit = "-"
+per = "run"
+acceptance = "Every CSV's sidecar names the movie's SHA-256, every op with its version and resolved params (stabilisation, crop, transient included), and the units; plots and overlay written"
+test = "tests/test_liquid_gas.py::test_m7_provenance"
+[[measurements]]
+id = "M8"
+what = "ROI crop leaves the numbers and coordinates unchanged"
+unit = "-"
+per = "time point"
+acceptance = "Tracing a ROI: depth, width and area within 2%, centre and surface within 0.5 px (full-frame) of the full-frame result; the crop's frame = the full frame with its origin at the ROI's first pixel; bad bounds rejected"
+test = "tests/test_ops.py::test_m8_crop_keeps_numbers_and_coordinates"
+[[measurements]]
+id = "M9"
+what = "Formats: TIFF, HDF5, NPY and lossless video give the same frames and numbers"
+unit = "-"
+per = "run"
+acceptance = "Frames bit-identical to the source (incl. backward seeks in video); HDF5, NPY, 16-bit FFV1 tables identical to TIFF; 8-bit AVI band-centre depth within 1.5 px; reader chosen by content; palette (pal8) video not black after seeking (runs where the lab file is present)"
+test = "tests/test_formats.py::test_lossless_containers_give_identical_numbers"
+[[measurements]]
+id = "M10"
+what = "Sub-pixel stabilisation"
+unit = "px"
+per = "frame"
+acceptance = "0.3 px synthetic shake: residual RMS < 0.05 px (y) / 0.10 px (x) in fixed mode on a static sample; < 0.12 px in jitter mode, a steady drift preserved within 2%; the stabilised median closer to the shake-free one"
+test = "tests/test_boundaries.py::test_m10_stabilise_fixed_static_sample"
+[[measurements]]
+id = "M11"
+what = "Stabilisation keeps the pool's own motion"
+unit = "um"
+per = "run"
+acceptance = "Stabilised (fixed, automatic region) on 0.2 px shake: the 5% depth oscillation's amplitude within 15%"
+test = "tests/test_liquid_gas.py::test_m3_stabilisation_keeps_the_oscillation"
+[[measurements]]
+id = "M12"
+what = "Liquid-solid line on the stabilised median"
+unit = "um, um2"
+per = "run"
+acceptance = "No line: never reported (2 seeds); 5% line: detected, depth within 2 px, width within 4 px; hand-traced half-ellipse: depth and width exact, area within 3%"
+test = "tests/test_boundaries.py::test_m12_auto_search_reports_nothing_without_a_line"
+[[measurements]]
+id = "M13"
+what = "Transient frames (running-median subtraction)"
+unit = "grey levels or relative"
+per = "frame"
+acceptance = "Shown frame = frame - running median exactly; an oscillating rim stands out (> 3x) over static substrate; display only by default, the analysis only when chosen; the setting recorded in the provenance"
+test = "tests/test_gui.py::test_transient_step"
+[[measurements]]
+id = "M14"
+what = "3D transparency"
+unit = "-"
+per = "view"
+acceptance = "Opacity exactly 0 outside [transparent below, transparent above], max opacity inside [opaque from, opaque to], linear between; presets hide dark or bright values without making the visible end transparent"
+test = "tests/test_gui.py::test_3d_transparency_panel"
+
+[[plots]]
+id = "P1"
+kind = "scatter"
+from = "table"
+shows = "Depth, width and area against time for the three lines, blank / start-up time points shaded"
+[[plots]]
+id = "P2"
+kind = "other"
+from = "spectrum"
+shows = "Amplitude spectrum of depth (three lines, steady part) with the dominant frequency marked"
+[[plots]]
+id = "P3"
+kind = "bar"
+from = "batch summary"
+shows = "Steady-state median depth (three lines) and band-centre width per run"

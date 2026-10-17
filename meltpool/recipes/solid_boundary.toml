@@ -1,0 +1,36 @@
+schema_version = 1
+name = "meltpool-solid-boundary"
+description = "Liquid-solid boundary from the stabilised temporal median of a movie"
+
+[[steps]]
+id = "load"
+op = "meltpool.open_movie"
+outputs = { movie = "movie", frame = "frame", frames = "frames" }
+params = { path = "data/synthetic_movie.tif", pixel_um = 4.44, fps = 20000.0, flip_vertical = true }
+
+[[steps]]
+id = "stabilise"
+op = "meltpool.stabilise"
+inputs = { movie = "movie", frames = "frames" }
+outputs = { movie = "stable_movie", shifts = "shifts" }
+params = { enabled = true, mode = "fixed" }
+
+[[steps]]
+id = "crop"
+op = "meltpool.crop"
+inputs = { movie = "stable_movie", frame = "frame" }
+outputs = { movie = "roi_movie", frame = "roi_frame" }
+params = { x0 = 0, x1 = 0, y0 = 0, y1 = 0 }
+
+[[steps]]
+id = "median"
+op = "meltpool.median_image"
+inputs = { movie = "roi_movie", frames = "frames" }
+outputs = { image = "median" }
+
+[[steps]]
+id = "solid"
+op = "meltpool.solid_boundary"
+inputs = { image = "median", frame = "roi_frame", movie = "roi_movie" }
+outputs = { table = "solid", line = "solid_line" }
+params = { points = "" }
