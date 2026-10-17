@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hcrcells"
+version = "0.1.0"
+description = "Per-cell HCR spot counts and intensities in C. elegans ASI/ASJ across photobleaching series, on vanua."
+requires-python = ">=3.11,<3.13"
+dependencies = ["vanua"]
+
+[project.scripts]
+hcrcells = "hcrcells.app:main"
+hcrcells-series = "hcrcells.series:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+hcrcells = ["assets/*.svg"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

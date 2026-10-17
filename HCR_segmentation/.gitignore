@@ -1,0 +1,8 @@
+originals/
+data/
+out/
+__pycache__/
+*.egg-info/
+.pixi/
+out_quick/
+out_groups/

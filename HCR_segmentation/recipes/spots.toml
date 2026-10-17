@@ -1,0 +1,113 @@
+# The second stage of the parallel series runner (hcrcells.series): the
+# timepoint recipe from the cells the first stage segmented and cached
+# (recipes/cells.toml, whole volume) -- the cells of interest, matched to
+# `select.targets`, their ROI and reference region, spots and per-cell
+# measurements. The same steps and parameters as recipes/timepoint.toml after
+# its segmentation, so the numbers are identical. The images and their frame
+# are read from the source file again; only the masks and table come from the cache.
+schema_version = 1
+name = "hcr_spots"
+
+[[steps]]
+id = "read_daf28"
+op = "io.read_image"
+outputs = { image = "daf28", frame = "frame" }
+params = { path = "originals/N2_ins-6_488_DAPI_40xrepeatall.1.czi - T=0.tif", channel = 0 }
+
+[[steps]]
+id = "read_ins4"
+op = "io.read_image"
+outputs = { image = "ins4" }
+params = { path = "originals/N2_ins-6_488_DAPI_40xrepeatall.1.czi - T=0.tif", channel = 1 }
+
+[[steps]]
+id = "read_ins6"
+op = "io.read_image"
+outputs = { image = "ins6" }
+params = { path = "originals/N2_ins-6_488_DAPI_40xrepeatall.1.czi - T=0.tif", channel = 2 }
+
+# -- the first stage's cells (cache) ----------------------------------------------------
+[[steps]]
+id = "load_cells"
+op = "hcrcells.read_label_cache"
+outputs = { labels = "cells" }
+params = { path = "" }
+
+[[steps]]
+id = "load_objects"
+op = "hcrcells.read_table_cache"
+outputs = { table = "objects" }
+params = { path = "" }
+
+# -- cells of interest and their ROI ---------------------------------------------------
+[[steps]]
+id = "select"
+op = "hcrcells.select_cells"
+inputs = { table = "objects", labels = "cells", frame = "frame" }
+outputs = { table = "selected", roi = "roi", ref_roi = "ref_roi" }
+params = { targets = "", max_distance = 3.0, margin_xy = 8.0, margin_z = 3.0, ref_margin_xy = 25.0, ref_margin_z = 10.0 }
+
+[[steps]]
+id = "crop_cells"
+op = "hcrcells.crop_labels"
+inputs = { labels = "cells", roi = "ref_roi" }
+outputs = { labels = "roi_cells" }
+
+[[steps]]
+id = "crop_daf28"
+op = "hcrcells.crop_image"
+inputs = { image = "daf28", frame = "frame", roi = "ref_roi" }
+outputs = { image = "roi_daf28", frame = "roi_frame" }
+
+[[steps]]
+id = "crop_ins4"
+op = "hcrcells.crop_image"
+inputs = { image = "ins4", frame = "frame", roi = "ref_roi" }
+outputs = { image = "roi_ins4" }
+
+[[steps]]
+id = "crop_ins6"
+op = "hcrcells.crop_image"
+inputs = { image = "ins6", frame = "frame", roi = "ref_roi" }
+outputs = { image = "roi_ins6" }
+
+# -- spots, in the reference region -----------------------------------------------------------------
+[[steps]]
+id = "spots_daf28"
+op = "hcrcells.detect_spots"
+inputs = { image = "roi_daf28", frame = "roi_frame" }
+outputs = { table = "spots_daf28" }
+
+[[steps]]
+id = "spots_ins4"
+op = "hcrcells.detect_spots"
+inputs = { image = "roi_ins4", frame = "roi_frame" }
+outputs = { table = "spots_ins4" }
+
+[[steps]]
+id = "spots_ins6"
+op = "hcrcells.detect_spots"
+inputs = { image = "roi_ins6", frame = "roi_frame" }
+outputs = { table = "spots_ins6" }
+
+# -- per-cell measurements, in the reference region -------------------------------------------------
+[[steps]]
+id = "stats_daf28"
+op = "hcrcells.channel_stats"
+inputs = { table = "selected", labels = "roi_cells", image = "roi_daf28", spots = "spots_daf28", frame = "roi_frame" }
+outputs = { table = "cells_t1" }
+params = { channel = "daf28" }
+
+[[steps]]
+id = "stats_ins4"
+op = "hcrcells.channel_stats"
+inputs = { table = "cells_t1", labels = "roi_cells", image = "roi_ins4", spots = "spots_ins4", frame = "roi_frame" }
+outputs = { table = "cells_t2" }
+params = { channel = "ins4" }
+
+[[steps]]
+id = "stats_ins6"
+op = "hcrcells.channel_stats"
+inputs = { table = "cells_t2", labels = "roi_cells", image = "roi_ins6", spots = "spots_ins6", frame = "roi_frame" }
+outputs = { table = "cell_table" }
+params = { channel = "ins6" }
